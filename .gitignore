@@ -1,0 +1,7 @@
+bin/
+obj/
+.vs/
+kuvat/
+kissakuva-state.json
+*.tmp
+models/

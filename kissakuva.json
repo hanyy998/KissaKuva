@@ -1,0 +1,31 @@
+{
+  // Kanavat, joista kuvat ja videot haetaan. Muodot /r/aww, r/aww ja aww käyvät.
+  "subreddits": [
+    "/r/aww",
+    "/r/awww",
+    "/r/catculations",
+    "/r/funnycats"
+  ],
+
+  // Tallennushakemisto ja tilatiedosto (suhteessa tämän tiedoston sijaintiin).
+  "outputDir": "kuvat",
+  "statePath": "kissakuva-state.json",
+
+  // Enintään näin monta postausta per kanava per ajo.
+  "limit": 50,
+
+  // Lataa myös videot. Ääni vaatii ffmpegin; rejectNonCats vaatii sen aina videoiden kanssa.
+  "downloadVideos": true,
+  // "ffmpegPath": "C:\\ffmpeg\\bin\\ffmpeg.exe",
+
+  // Kissantunnistus YOLO-malleilla. Tulos näytetään aina; rejectNonCats hylkää postaukset ilman kissaa.
+  "rejectNonCats": true,
+  // Mallit ladataan automaattisesti ensimmäisellä ajolla. Tyhjä yoloClassModel = ei luokittelua.
+  "yoloModel": "models/yolov11s.onnx",
+  "yoloClassModel": "models/yolov11s-cls.onnx",
+  // Tunnistusmallin vähimmäisvarmuus ja luokittelumallin kissaeläinluokkien summan raja (0-1).
+  "confidence": 0.4,
+  "classConfidence": 0.5,
+  // Tallenna hylätyt hakemistoon kuvat/_ei-kissa.
+  "keepRejected": true
+}
