@@ -15,14 +15,14 @@ public sealed record MediaItem(MediaKind Kind, string Url)
     public bool IsVideo => Kind != MediaKind.Image;
 }
 
-/// <param name="ThumbnailUrl">Postauksen esikatselukuva (käytetään videoiden tekoälytarkistukseen).</param>
+/// <param name="ThumbnailUrl">The post's preview image (used to check videos for cats).</param>
 public sealed record RedditPost(string Id, string Title, double CreatedUtc, IReadOnlyList<MediaItem> Media, string? ThumbnailUrl);
 
 /// <summary>
-/// Hakee alireddittien uusimmat postaukset.
-/// Jos REDDIT_CLIENT_ID ja REDDIT_CLIENT_SECRET on asetettu, käytetään virallista OAuth-rajapintaa
-/// (oauth.reddit.com, ~100 pyyntöä/min, tukee gallerioita). Muuten käytetään julkista RSS-syötettä,
-/// joka toimii ilman tunnuksia mutta on tiukasti rajoitettu ja näkee vain suorat kuvalinkit.
+/// Fetches the newest posts of subreddits.
+/// If REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are set, the official OAuth API is used
+/// (oauth.reddit.com, ~100 requests/min, supports galleries). Otherwise the public RSS feed is used,
+/// which works without credentials but is tightly rate-limited and only sees direct media links.
 /// </summary>
 public sealed partial class RedditClient
 {
@@ -43,8 +43,8 @@ public sealed partial class RedditClient
     private sealed record Page(List<(RedditPost? Post, double Created, bool Stickied)> Items, string? After);
 
     /// <summary>
-    /// Palauttaa kuvapostaukset, jotka on luotu <paramref name="sinceUtc"/> jälkeen (tai uusimmat,
-    /// jos aiempaa hakua ei ole). Enintään <paramref name="limit"/> postausta tarkastellaan.
+    /// Returns the media posts created after <paramref name="sinceUtc"/> (or the newest ones,
+    /// if there was no earlier fetch). At most <paramref name="limit"/> posts are looked at.
     /// </summary>
     public async Task<List<RedditPost>> GetNewPostsAsync(string subreddit, double? sinceUtc, int limit)
     {
@@ -62,8 +62,8 @@ public sealed partial class RedditClient
 
             foreach (var (post, created, stickied) in page.Items)
             {
-                // Uutuusjärjestyksessä: kun saavutetaan jo käsitelty postaus, lopetetaan.
-                // (Kiinnitetyt postaukset voivat olla vanhoja, joten niitä ei käytetä pysäyttämiseen.)
+                // Newest first: stop at the first post that was already handled.
+                // (Pinned posts can be old, so they do not stop the fetch.)
                 if (sinceUtc is { } since && created <= since)
                 {
                     if (stickied) continue;
@@ -133,7 +133,7 @@ public sealed partial class RedditClient
 
         using var doc = JsonDocument.Parse(body);
         if (!doc.RootElement.TryGetProperty("access_token", out var t))
-            throw new HttpRequestException("Reddit OAuth -tunnistautuminen epäonnistui: " + body);
+            throw new HttpRequestException("Reddit OAuth authentication failed: " + body);
         _token = t.GetString();
         var expiresIn = doc.RootElement.TryGetProperty("expires_in", out var e) ? e.GetInt32() : 3600;
         _tokenExpires = DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60);
@@ -151,7 +151,7 @@ public sealed partial class RedditClient
     {
         var urls = new List<MediaItem>();
 
-        // Galleriapostaukset: kuvat ovat media_metadata-kentässä, järjestys gallery_data-kentässä.
+        // Gallery posts: the images are in media_metadata, their order in gallery_data.
         if (p.TryGetProperty("is_gallery", out var g) && g.ValueKind == JsonValueKind.True
             && p.TryGetProperty("media_metadata", out var meta) && meta.ValueKind == JsonValueKind.Object
             && p.TryGetProperty("gallery_data", out var gd) && gd.ValueKind == JsonValueKind.Object)
@@ -165,14 +165,14 @@ public sealed partial class RedditClient
                 if (s.TryGetProperty("u", out var u) && u.GetString() is { } img)
                     urls.Add(new MediaItem(MediaKind.Image, img));
                 else if (s.TryGetProperty("mp4", out var mp4) && mp4.GetString() is { } mp4Url)
-                    urls.Add(new MediaItem(MediaKind.DirectVideo, mp4Url));   // animoitu galleriakuva
+                    urls.Add(new MediaItem(MediaKind.DirectVideo, mp4Url));   // animated gallery image
                 else if (s.TryGetProperty("gif", out var gif) && gif.GetString() is { } gifUrl)
                     urls.Add(new MediaItem(MediaKind.Image, gifUrl));
             }
             return urls;
         }
 
-        // Suora linkki kuvaan tai videoon (i.redd.it, v.redd.it, i.imgur.com jne.).
+        // Direct link to an image or video (i.redd.it, v.redd.it, i.imgur.com, etc.).
         if ((p.TryGetProperty("url_overridden_by_dest", out var dest) || p.TryGetProperty("url", out dest))
             && dest.GetString() is { } url && ClassifyUrl(url) is { } linked)
         {
@@ -181,7 +181,7 @@ public sealed partial class RedditClient
         return urls;
     }
 
-    // ---------------------------------------------------------------- RSS (ilman tunnuksia)
+    // ---------------------------------------------------------------- RSS (no credentials)
 
     private async Task<Page> GetRssPageAsync(string subreddit, int pageSize, string? after)
     {
@@ -194,7 +194,7 @@ public sealed partial class RedditClient
         string? lastId = null;
         foreach (var entry in feed.Root!.Elements(Atom + "entry"))
         {
-            var fullId = entry.Element(Atom + "id")?.Value ?? "";        // esim. t3_1xw5ydb
+            var fullId = entry.Element(Atom + "id")?.Value ?? "";        // e.g. t3_1xw5ydb
             var published = entry.Element(Atom + "published")?.Value ?? entry.Element(Atom + "updated")?.Value;
             if (!fullId.StartsWith("t3_") || published is null) continue;
             lastId = fullId;
@@ -203,7 +203,7 @@ public sealed partial class RedditClient
             var title = entry.Element(Atom + "title")?.Value ?? "";
             var html = entry.Element(Atom + "content")?.Value ?? "";
 
-            // Sisällön "[link]"-linkki osoittaa postauksen kohteeseen (suora kuva, video, galleria...).
+            // The content's "[link]" points to the post's target (direct image, video, gallery...).
             var match = RssLinkRegex().Match(html);
             var link = match.Success ? WebUtility.HtmlDecode(match.Groups[1].Value) : null;
             var thumb = (string?)entry.Element(Media + "thumbnail")?.Attribute("url");
@@ -213,16 +213,16 @@ public sealed partial class RedditClient
             items.Add((post, created, false));
         }
 
-        // RSS ei kerro seuraavaa sivua; käytetään viimeisen postauksen tunnistetta.
+        // RSS gives no next-page token; use the id of the last post.
         return new Page(items, items.Count >= pageSize ? lastId : null);
     }
 
     [GeneratedRegex("<a href=\"([^\"]+)\">\\[link\\]</a>")]
     private static partial Regex RssLinkRegex();
 
-    // ---------------------------------------------------------------- yhteiset
+    // ---------------------------------------------------------------- shared
 
-    /// <summary>Päättelee linkistä, onko se kuva, suora video vai Redditin oma video. Muut: null.</summary>
+    /// <summary>Tells from a link whether it is an image, a direct video or a Reddit video. Anything else: null.</summary>
     private static MediaItem? ClassifyUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
@@ -232,12 +232,12 @@ public sealed partial class RedditClient
         var ext = Path.GetExtension(uri.AbsolutePath).ToLowerInvariant();
         if (ImageExtensions.Contains(ext)) return new MediaItem(MediaKind.Image, url);
         if (ext == ".mp4") return new MediaItem(MediaKind.DirectVideo, url);
-        if (ext == ".gifv") // Imgurin .gifv on oikeasti mp4-video
+        if (ext == ".gifv") // Imgur's .gifv is really an mp4 video
             return new MediaItem(MediaKind.DirectVideo, url[..url.LastIndexOf(".gifv", StringComparison.OrdinalIgnoreCase)] + ".mp4");
         return null;
     }
 
-    /// <summary>Lähettää pyynnön ja odottaa tarvittaessa Redditin pyyntörajoituksen nollautumista.</summary>
+    /// <summary>Sends a request and, when needed, waits for Reddit's rate limit to reset.</summary>
     private async Task<string> SendAsync(Func<HttpRequestMessage> makeRequest)
     {
         const int maxAttempts = 6;
@@ -249,18 +249,18 @@ public sealed partial class RedditClient
             if (resp.StatusCode == HttpStatusCode.TooManyRequests && attempt < maxAttempts)
             {
                 var wait = RateLimitReset(resp) ?? TimeSpan.FromSeconds(10 * attempt);
-                Console.WriteLine($"  Reddit rajoittaa pyyntöjä, odotetaan {wait.TotalSeconds:0} s...");
+                Console.WriteLine($"  Reddit is rate-limiting requests, waiting {wait.TotalSeconds:0} s...");
                 await Task.Delay(wait);
                 continue;
             }
 
             if (resp.StatusCode == HttpStatusCode.Forbidden && !UsesOAuth)
                 throw new HttpRequestException(
-                    "Reddit esti pyynnön (403). Aseta REDDIT_CLIENT_ID ja REDDIT_CLIENT_SECRET (ks. README).");
+                    "Reddit blocked the request (403). Set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET (see README).");
             resp.EnsureSuccessStatusCode();
             var body = await resp.Content.ReadAsStringAsync();
 
-            // Jos kiintiö on käytetty, odotetaan ennen seuraavaa pyyntöä.
+            // If the quota is used up, wait before the next request.
             if (resp.Headers.TryGetValues("x-ratelimit-remaining", out var rem)
                 && double.TryParse(rem.First(), CultureInfo.InvariantCulture, out var remaining)
                 && remaining < 1 && RateLimitReset(resp) is { } reset)

@@ -2,7 +2,7 @@ namespace KissaKuva;
 
 public static class ImageFormat
 {
-    /// <summary>Tunnistaa kuvan tyypin tiedoston alkutavuista. Palauttaa MIME-tyypin tai null.</summary>
+    /// <summary>Detects the image type from the file's first bytes. Returns the MIME type or null.</summary>
     public static string? Detect(ReadOnlySpan<byte> b)
     {
         if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";

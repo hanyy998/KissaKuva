@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace KissaKuva;
 
-/// <summary>Parametritiedoston (kissakuva.json) rakenne.</summary>
+/// <summary>Shape of the config file (kissakuva.json).</summary>
 public sealed class ConfigFile
 {
     public List<string> Subreddits { get; set; } = [];
@@ -25,14 +25,14 @@ public sealed class Options
 
     public List<string> Subreddits { get; } = [];
     public string ConfigPath { get; private set; } = DefaultConfigPath;
-    public string OutputDir { get; private set; } = "kuvat";
+    public string OutputDir { get; private set; } = "images";
     public string StatePath { get; private set; } = "kissakuva-state.json";
     public int Limit { get; private set; } = 50;
     public bool RejectNonCats { get; private set; }
     public bool KeepRejected { get; private set; }
     public bool DownloadVideos { get; private set; } = true;
     public string YoloModel { get; private set; } = Path.Combine("models", CatClassifier.DefaultDetectModelFile);
-    /// <summary>Luokittelumalli; tyhjä = luokittelu pois käytöstä.</summary>
+    /// <summary>Classification model; empty = classification off.</summary>
     public string YoloClassModel { get; private set; } = Path.Combine("models", CatClassifier.DefaultClassModelFile);
     public double Confidence { get; private set; } = 0.4;
     public double ClassConfidence { get; private set; } = 0.5;
@@ -46,7 +46,7 @@ public sealed class Options
         AllowTrailingCommas = true,
     };
 
-    /// <summary>Lukee parametritiedoston ja soveltaa komentorivin valitsimet sen päälle.</summary>
+    /// <summary>Reads the config file and applies the command-line options on top of it.</summary>
     public static Options Parse(string[] args)
     {
         var o = new Options();
@@ -55,7 +55,7 @@ public sealed class Options
         for (int i = 0; i < args.Length; i++)
         {
             var a = args[i];
-            string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"Valitsin {a} vaatii arvon.");
+            string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"Option {a} needs a value.");
 
             switch (a)
             {
@@ -74,7 +74,7 @@ public sealed class Options
                 case "-n" or "--limit":
                     {
                         if (!int.TryParse(Next(), out var n) || n < 1)
-                            throw new ArgumentException("--limit pitää olla positiivinen kokonaisluku.");
+                            throw new ArgumentException("--limit must be a positive integer.");
                         overrides.Add(() => o.Limit = n);
                     }
                     break;
@@ -113,8 +113,8 @@ public sealed class Options
                     break;
                 default:
                     throw new ArgumentException(a.StartsWith('-')
-                        ? $"Tuntematon valitsin: {a}"
-                        : $"Tuntematon parametri: {a}. Kanavat määritellään parametritiedostossa ({DefaultConfigPath}).");
+                        ? $"Unknown option: {a}"
+                        : $"Unknown argument: {a}. Subreddits are set in the config file ({DefaultConfigPath}).");
             }
         }
 
@@ -122,14 +122,14 @@ public sealed class Options
         foreach (var apply in overrides) apply();
 
         if (o.Subreddits.Count == 0)
-            throw new ArgumentException($"Parametritiedostossa {o.ConfigPath} ei ole yhtään kanavaa (\"subreddits\").");
+            throw new ArgumentException($"The config file {o.ConfigPath} lists no subreddits (\"subreddits\").");
         return o;
     }
 
     private void LoadConfig()
     {
         if (!File.Exists(ConfigPath))
-            throw new ArgumentException($"Parametritiedostoa ei löydy: {Path.GetFullPath(ConfigPath)}");
+            throw new ArgumentException($"Config file not found: {Path.GetFullPath(ConfigPath)}");
 
         ConfigFile cfg;
         try
@@ -138,10 +138,10 @@ public sealed class Options
         }
         catch (JsonException ex)
         {
-            throw new ArgumentException($"Parametritiedosto {ConfigPath} on virheellinen: {ex.Message}");
+            throw new ArgumentException($"Config file {ConfigPath} is invalid: {ex.Message}");
         }
 
-        // Tiedostossa annetut suhteelliset polut tulkitaan suhteessa parametritiedoston hakemistoon.
+        // Relative paths in the file are relative to the config file's folder.
         var baseDir = Path.GetDirectoryName(Path.GetFullPath(ConfigPath))!;
         string Resolve(string p) => Path.IsPathRooted(p) ? p : Path.Combine(baseDir, p);
 
@@ -150,12 +150,12 @@ public sealed class Options
         StatePath = Resolve(cfg.StatePath ?? StatePath);
         if (cfg.Limit is { } limit)
         {
-            if (limit < 1) throw new ArgumentException("\"limit\" pitää olla positiivinen kokonaisluku.");
+            if (limit < 1) throw new ArgumentException("\"limit\" must be a positive integer.");
             Limit = limit;
         }
         RejectNonCats = cfg.RejectNonCats ?? RejectNonCats;
         YoloModel = Resolve(cfg.YoloModel ?? YoloModel);
-        // Tyhjä yoloClassModel kytkee luokittelun pois; muuten polku tulkitaan kuten muutkin.
+        // An empty yoloClassModel turns classification off; otherwise the path resolves like the others.
         if (cfg.YoloClassModel is { } classModel)
             YoloClassModel = string.IsNullOrWhiteSpace(classModel) ? "" : Resolve(classModel);
         else
@@ -163,11 +163,11 @@ public sealed class Options
         if (cfg.Confidence is { } conf)
             Confidence = conf is > 0 and < 1
                 ? conf
-                : throw new ArgumentException("\"confidence\" pitää olla luku väliltä 0–1 (esim. 0.4).");
+                : throw new ArgumentException("\"confidence\" must be a number between 0 and 1 (e.g. 0.4).");
         if (cfg.ClassConfidence is { } classConf)
             ClassConfidence = classConf is > 0 and < 1
                 ? classConf
-                : throw new ArgumentException("\"classConfidence\" pitää olla luku väliltä 0–1 (esim. 0.5).");
+                : throw new ArgumentException("\"classConfidence\" must be a number between 0 and 1 (e.g. 0.5).");
         KeepRejected = cfg.KeepRejected ?? KeepRejected;
         DownloadVideos = cfg.DownloadVideos ?? DownloadVideos;
         FfmpegPath = cfg.FfmpegPath ?? FfmpegPath;
@@ -177,20 +177,20 @@ public sealed class Options
         double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var c)
         && c is > 0 and < 1
             ? c
-            : throw new ArgumentException($"{name} pitää olla luku väliltä 0–1 (esim. 0.4).");
+            : throw new ArgumentException($"{name} must be a number between 0 and 1 (e.g. 0.4).");
 
     private void AddSubreddit(string raw)
     {
-        // Hyväksyy muodot: /r/aww, r/aww, aww, https://www.reddit.com/r/aww/
+        // Accepts: /r/aww, r/aww, aww, https://www.reddit.com/r/aww/
         var s = raw.Trim().TrimEnd('/');
         var idx = s.LastIndexOf("r/", StringComparison.OrdinalIgnoreCase);
         if (idx >= 0) s = s[(idx + 2)..];
         s = s.Trim('/');
 
         if (s.Length == 0 || !s.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
-            throw new ArgumentException($"Virheellinen alireddit parametritiedostossa: {raw}");
+            throw new ArgumentException($"Invalid subreddit in the config file: {raw}");
 
-        // Joukko: sama kanava vain kerran (kirjainkoolla ei väliä).
+        // A set: each subreddit once, ignoring case.
         if (!Subreddits.Contains(s, StringComparer.OrdinalIgnoreCase))
             Subreddits.Add(s);
     }
@@ -198,37 +198,39 @@ public sealed class Options
     public static void PrintUsage()
     {
         Console.WriteLine("""
-            KissaKuva - lataa uusimmat kissakuvat ja -videot Redditistä
+            KissaKuva - downloads the newest cat pictures and videos from Reddit
 
-            Käyttö:
-              KissaKuva [valitsimet]
+            Usage:
+              KissaKuva [options]
 
-            Kanavat ja asetukset luetaan parametritiedostosta (oletus: kissakuva.json):
+            Subreddits and settings are read from the config file (default: kissakuva.json):
 
               {
                 "subreddits": [ "/r/aww", "/r/cats" ],
-                "outputDir": "kuvat",
+                "outputDir": "images",
                 "limit": 50,
                 "rejectNonCats": true,
                 "downloadVideos": true
               }
 
-            Komentorivin valitsimet ohittavat tiedoston asetukset:
-              -c, --config <tiedosto>  Parametritiedosto (oletus: kissakuva.json)
-              -o, --out <hakemisto>    Tallennushakemisto
-              -s, --state <tiedosto>   Tilatiedosto viimeisille hauille
-              -n, --limit <luku>       Enintään näin monta postausta per kanava per ajo
-                  --reject-non-cats    Hylkää kuvat ja videot, joissa ei tunnistettu kissaa
-                  --no-reject          Tallenna kaikki (tunnistustulos näytetään silti)
-                  --model <polku>      YOLO-tunnistusmalli (oletus: models/yolov11s.onnx)
-                  --class-model <polku>  YOLO-luokittelumalli (oletus: models/yolov11s-cls.onnx;
-                                       tyhjä "" = ei luokittelua)
-                  --confidence <0-1>   Tunnistusmallin vähimmäisvarmuus (oletus: 0.4)
-                  --class-confidence <0-1>  Kissaeläinluokkien summan raja (oletus: 0.5)
-                  --keep-rejected      Tallenna hylätyt hakemistoon <out>/_ei-kissa
-                  --no-videos          Älä lataa videoita
-                  --ffmpeg <polku>     ffmpeg-ohjelman polku (valinnainen)
-              -h, --help               Näytä tämä ohje
+            Files are saved to <out>/<yyyy-MM-dd>/<subreddit>/ (the download day).
+
+            Command-line options override the file:
+              -c, --config <file>      Config file (default: kissakuva.json)
+              -o, --out <folder>       Output folder
+              -s, --state <file>       State file for the last fetches
+              -n, --limit <number>     At most this many posts per subreddit per run
+                  --reject-non-cats    Reject images and videos with no detected cat
+                  --no-reject          Save everything (the detection result is still shown)
+                  --model <path>       YOLO detection model (default: models/yolov11s.onnx)
+                  --class-model <path>  YOLO classification model (default: models/yolov11s-cls.onnx;
+                                       empty "" = no classification)
+                  --confidence <0-1>   Minimum confidence of the detection model (default: 0.4)
+                  --class-confidence <0-1>  Threshold for the sum of the feline classes (default: 0.5)
+                  --keep-rejected      Save rejected files to <out>/_rejected/<yyyy-MM-dd>/<subreddit>/
+                  --no-videos          Do not download videos
+                  --ffmpeg <path>      Path to ffmpeg (optional)
+              -h, --help               Show this help
             """);
     }
 }

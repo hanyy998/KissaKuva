@@ -1,5 +1,5 @@
 {
-  // Kanavat, joista kuvat ja videot haetaan. Muodot /r/aww, r/aww ja aww käyvät.
+  // Subreddits to fetch images and videos from. /r/aww, r/aww and aww all work.
   "subreddits": [
     "/r/aww",
     "/r/awww",
@@ -7,25 +7,26 @@
     "/r/funnycats"
   ],
 
-  // Tallennushakemisto ja tilatiedosto (suhteessa tämän tiedoston sijaintiin).
-  "outputDir": "kuvat",
+  // Output folder and state file (relative to this file's folder).
+  // Files are saved to <outputDir>/<yyyy-MM-dd>/<subreddit>/ (the download day).
+  "outputDir": "images",
   "statePath": "kissakuva-state.json",
 
-  // Enintään näin monta postausta per kanava per ajo.
+  // At most this many posts per subreddit per run.
   "limit": 50,
 
-  // Lataa myös videot. Ääni vaatii ffmpegin; rejectNonCats vaatii sen aina videoiden kanssa.
+  // Download videos too. Audio needs ffmpeg; rejectNonCats always needs it with videos.
   "downloadVideos": true,
   // "ffmpegPath": "C:\\ffmpeg\\bin\\ffmpeg.exe",
 
-  // Kissantunnistus YOLO-malleilla. Tulos näytetään aina; rejectNonCats hylkää postaukset ilman kissaa.
+  // Cat detection with YOLO models. The result is always shown; rejectNonCats rejects posts without a cat.
   "rejectNonCats": true,
-  // Mallit ladataan automaattisesti ensimmäisellä ajolla. Tyhjä yoloClassModel = ei luokittelua.
+  // Models are downloaded automatically on the first run. Empty yoloClassModel = no classification.
   "yoloModel": "models/yolov11s.onnx",
   "yoloClassModel": "models/yolov11s-cls.onnx",
-  // Tunnistusmallin vähimmäisvarmuus ja luokittelumallin kissaeläinluokkien summan raja (0-1).
+  // Minimum confidence of the detection model, and threshold for the sum of the feline classes (0-1).
   "confidence": 0.4,
   "classConfidence": 0.5,
-  // Tallenna hylätyt hakemistoon kuvat/_ei-kissa.
+  // Save rejected posts to images/_rejected/<yyyy-MM-dd>/<subreddit>/.
   "keepRejected": true
 }

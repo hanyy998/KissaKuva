@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace KissaKuva;
 
-/// <summary>Kanavakohtainen tila: uusimman käsitellyn postauksen aikaleima ja viimeisin ajo.</summary>
+/// <summary>Per-subreddit state: the timestamp of the newest handled post and the last run.</summary>
 public sealed class SubredditState
 {
     public double? LastPostUtc { get; set; }
@@ -29,7 +29,7 @@ public static class StateStore
     {
         if (!File.Exists(path)) return new AppState();
         var loaded = JsonSerializer.Deserialize<AppState>(File.ReadAllText(path), JsonOptions) ?? new AppState();
-        // Palautetaan kirjainkoosta riippumaton sanakirja.
+        // Restore the case-insensitive dictionary.
         loaded.Subreddits = new(loaded.Subreddits, StringComparer.OrdinalIgnoreCase);
         return loaded;
     }
@@ -38,7 +38,7 @@ public static class StateStore
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        // Kirjoitetaan ensin väliaikaistiedostoon, ettei keskeytys korruptoi tilaa.
+        // Write to a temp file first, so an interruption cannot corrupt the state.
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(state, JsonOptions));
         File.Move(tmp, path, overwrite: true);

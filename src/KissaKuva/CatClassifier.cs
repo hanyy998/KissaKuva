@@ -8,52 +8,35 @@ namespace KissaKuva;
 
 public enum CatVerdict { Cat, NotCat, Unverifiable }
 
-/// <summary>Tunnistuksen tulos, lyhyt kuvaus ja vertailuluku (kissan varmuus, 0–1).</summary>
+/// <summary>Detection result, a short summary and a score for ranking (cat confidence, 0–1).</summary>
 public sealed record CatResult(CatVerdict Verdict, double Score, string Summary)
 {
-    public static readonly CatResult Unverifiable = new(CatVerdict.Unverifiable, 0, "ei voitu tarkistaa");
+    public static readonly CatResult Unverifiable = new(CatVerdict.Unverifiable, 0, "could not check");
 }
 
 /// <summary>
-/// Tunnistaa kissaeläimet kahdella YOLO-mallilla (YoloDotNet, ONNX Runtime CPU:lla):
+/// Finds felines with two YOLO models (YoloDotNet, ONNX Runtime on the CPU):
 /// <list type="number">
-/// <item>Objektintunnistus (COCO-luokka "cat") löytää myös pienet kissat isosta kuvasta.</item>
-/// <item>Jos kissaa ei löytynyt, luokittelumalli (ImageNet) arvioi koko kuvan. Kissaeläinluokkien
-/// (kotikissat ja isot kissat) todennäköisyydet lasketaan yhteen ja summaa verrataan rajaan.</item>
+/// <item>Object detection (COCO class "cat") also finds small cats in a large image.</item>
+/// <item>If no cat was found, the classification model (ImageNet) rates the whole image. The
+/// probabilities of the feline classes (domestic and big cats) are summed and compared to a threshold.</item>
 /// </list>
-/// Kuva on kissa, jos jompikumpi malli niin sanoo.
+/// The image is a cat if either model says so.
 /// </summary>
 public sealed class CatClassifier : IDisposable
 {
     public const string DefaultDetectModelFile = "yolov11s.onnx";
     public const string DefaultClassModelFile = "yolov11s-cls.onnx";
 
-    /// <summary>Oletusmallit ladataan tarvittaessa YoloDotNetin testiaineistosta, lukittuna yhteen committiin.</summary>
+    /// <summary>Default models are downloaded on demand from YoloDotNet's test assets, pinned to one commit.</summary>
     private const string DefaultModelBaseUrl =
         "https://raw.githubusercontent.com/NickSwardh/YoloDotNet/1b10f4d491f570b8ef907c7f99421c95471e2dfe/test/assets/Models/";
 
-    /// <summary>ImageNetin kissaeläinluokat 281–293 (huom. "Madagascar cat" on lemuri ja "polecat" hilleri).</summary>
+    /// <summary>ImageNet feline classes 281–293 (note: "Madagascar cat" is a lemur and "polecat" a ferret).</summary>
     private static readonly HashSet<string> FelineClasses = new(StringComparer.OrdinalIgnoreCase)
     {
         "tabby", "tiger cat", "Persian cat", "Siamese cat", "Egyptian cat",
         "cougar", "lynx", "leopard", "snow leopard", "jaguar", "lion", "tiger", "cheetah",
-    };
-
-    private static readonly Dictionary<string, string> FinnishLabels = new(StringComparer.OrdinalIgnoreCase)
-    {
-        // COCO
-        ["person"] = "ihminen", ["dog"] = "koira", ["bird"] = "lintu", ["horse"] = "hevonen",
-        ["sheep"] = "lammas", ["cow"] = "lehmä", ["bear"] = "karhu", ["teddy bear"] = "nalle",
-        ["elephant"] = "norsu", ["zebra"] = "seepra", ["giraffe"] = "kirahvi", ["couch"] = "sohva",
-        ["bed"] = "sänky", ["chair"] = "tuoli", ["car"] = "auto", ["bicycle"] = "polkupyörä",
-        ["potted plant"] = "ruukkukasvi", ["tv"] = "televisio", ["laptop"] = "kannettava",
-        ["cell phone"] = "puhelin", ["book"] = "kirja", ["bowl"] = "kulho", ["cup"] = "kuppi",
-        ["bottle"] = "pullo", ["sink"] = "pesuallas", ["toilet"] = "wc-istuin",
-        // ImageNetin kissaeläimet
-        ["tabby"] = "tabby-kissa", ["tiger cat"] = "tiikerikissa", ["Persian cat"] = "persialainen",
-        ["Siamese cat"] = "siamilainen", ["Egyptian cat"] = "egyptiläinen kissa", ["cougar"] = "puuma",
-        ["lynx"] = "ilves", ["leopard"] = "leopardi", ["snow leopard"] = "lumileopardi",
-        ["jaguar"] = "jaguaari", ["lion"] = "leijona", ["tiger"] = "tiikeri", ["cheetah"] = "gepardi",
     };
 
     private readonly Yolo _detector;
@@ -71,8 +54,8 @@ public sealed class CatClassifier : IDisposable
 
     public bool UsesClassification => _classifier is not null;
 
-    /// <summary>Lataa mallit. Oletusmallit haetaan verkosta, jos tiedostoja ei vielä ole.</summary>
-    /// <param name="classModelPath">Luokittelumalli; tyhjä tai null = luokittelu pois käytöstä.</param>
+    /// <summary>Loads the models. Default models are downloaded if the files do not exist yet.</summary>
+    /// <param name="classModelPath">Classification model; empty or null turns classification off.</param>
     public static async Task<CatClassifier> CreateAsync(string detectModelPath, string? classModelPath,
         double confidence, double classConfidence, HttpClient http)
     {
@@ -95,19 +78,19 @@ public sealed class CatClassifier : IDisposable
         }
     }
 
-    /// <summary>Tunnistaa kuvan sisällön. Kuvamuodot: JPEG, PNG, GIF (ensimmäinen ruutu) ja WebP.</summary>
+    /// <summary>Checks what the image shows. Formats: JPEG, PNG, GIF (first frame) and WebP.</summary>
     public CatResult Classify(byte[] image)
     {
         using var bitmap = SKBitmap.Decode(image);
         if (bitmap is null) return CatResult.Unverifiable;
 
-        // 1. Objektintunnistus.
+        // 1. Object detection.
         var detections = _detector.RunObjectDetection(bitmap, confidence: _confidence, iou: 0.7);
         var cats = detections.Where(d => d.Label.Name.Equals("cat", StringComparison.OrdinalIgnoreCase)).ToList();
         if (cats.Count > 0)
         {
             var best = cats.Max(d => d.Confidence);
-            var count = cats.Count == 1 ? "kissa" : $"{cats.Count} kissaa";
+            var count = cats.Count == 1 ? "cat" : $"{cats.Count} cats";
             return new CatResult(CatVerdict.Cat, best, $"{count} {Percent(best)}");
         }
 
@@ -116,10 +99,10 @@ public sealed class CatClassifier : IDisposable
             .Select(g => (Name: g.Key, Confidence: g.Max(d => d.Confidence)))
             .OrderByDescending(x => x.Confidence)
             .Take(2)
-            .Select(x => $"{Translate(x.Name)} {Percent(x.Confidence)}")
+            .Select(x => $"{x.Name} {Percent(x.Confidence)}")
             .ToList();
 
-        // 2. Luokittelu vain, jos tunnistus ei löytänyt kissaa.
+        // 2. Classification only when detection found no cat.
         if (_classifier is not null)
         {
             var classes = _classifier.RunClassification(bitmap, classes: 1000);
@@ -129,14 +112,14 @@ public sealed class CatClassifier : IDisposable
             {
                 var top = felines.MaxBy(c => c.Confidence)!;
                 return new CatResult(CatVerdict.Cat, sum,
-                    $"kissaeläin {Percent(sum)} ({Translate(Normalize(top.Label))}, luokittelu)");
+                    $"feline {Percent(sum)} ({Normalize(top.Label)}, classifier)");
             }
             if (classes.MaxBy(c => c.Confidence) is { } topClass)
-                others.Add($"luokittelu: {Translate(Normalize(topClass.Label))} {Percent(topClass.Confidence)}");
+                others.Add($"classifier: {Normalize(topClass.Label)} {Percent(topClass.Confidence)}");
         }
 
         return new CatResult(CatVerdict.NotCat, 0,
-            others.Count > 0 ? $"ei kissaa ({string.Join("; ", others)})" : "ei kissaa");
+            others.Count > 0 ? $"no cat ({string.Join("; ", others)})" : "no cat");
     }
 
     public void Dispose()
@@ -152,9 +135,9 @@ public sealed class CatClassifier : IDisposable
         var file = Path.GetFileName(modelPath);
         if (!file.Equals(DefaultDetectModelFile, StringComparison.OrdinalIgnoreCase)
             && !file.Equals(DefaultClassModelFile, StringComparison.OrdinalIgnoreCase))
-            throw new FileNotFoundException($"YOLO-mallia ei löydy: {Path.GetFullPath(modelPath)}");
+            throw new FileNotFoundException($"YOLO model not found: {Path.GetFullPath(modelPath)}");
 
-        Console.WriteLine($"Ladataan YOLO-malli: {Path.GetFullPath(modelPath)}");
+        Console.WriteLine($"Downloading YOLO model: {Path.GetFullPath(modelPath)}");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(modelPath))!);
         var tmp = modelPath + ".tmp";
         using (var resp = await http.GetAsync(DefaultModelBaseUrl + file, HttpCompletionOption.ResponseHeadersRead))
@@ -169,8 +152,6 @@ public sealed class CatClassifier : IDisposable
 
     private static string Normalize(string label) => label.Replace('_', ' ');
 
-    private static string Translate(string label) => FinnishLabels.GetValueOrDefault(label, label);
-
     private static string Percent(double confidence) =>
-        string.Create(CultureInfo.InvariantCulture, $"{confidence * 100:0} %");
+        string.Create(CultureInfo.InvariantCulture, $"{confidence * 100:0}%");
 }

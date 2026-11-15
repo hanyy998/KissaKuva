@@ -13,8 +13,8 @@ try
 }
 catch (ArgumentException ex)
 {
-    Console.Error.WriteLine($"Virhe: {ex.Message}");
-    Console.Error.WriteLine("Katso ohje: KissaKuva --help");
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    Console.Error.WriteLine("See: KissaKuva --help");
     return 2;
 }
 
@@ -25,22 +25,22 @@ http.DefaultRequestHeaders.UserAgent.ParseAdd("KissaKuva/1.0 (cat picture downlo
 var reddit = new RedditClient(http);
 var videos = new VideoDownloader(http, options.FfmpegPath);
 
-Console.WriteLine($"Parametritiedosto: {Path.GetFullPath(options.ConfigPath)}");
+Console.WriteLine($"Config file: {Path.GetFullPath(options.ConfigPath)}");
 Console.WriteLine(reddit.UsesOAuth
-    ? "Reddit-yhteys: OAuth (REDDIT_CLIENT_ID)"
-    : "Reddit-yhteys: julkinen RSS-syöte (hidas; aseta REDDIT_CLIENT_ID/SECRET nopeampaa hakua varten)");
+    ? "Reddit access: OAuth (REDDIT_CLIENT_ID)"
+    : "Reddit access: public RSS feed (slow; set REDDIT_CLIENT_ID/SECRET for faster fetching)");
 
 if (options.DownloadVideos && videos.FfmpegPath is null)
 {
-    // Ilman ffmpegiä videosta voidaan tarkistaa vain esikatselukuva. Suodatus vaatii luotettavan tarkistuksen.
+    // Without ffmpeg only a video's preview image can be checked; filtering needs a reliable check.
     if (options.RejectNonCats)
     {
-        Console.Error.WriteLine("Virhe: rejectNonCats vaatii ffmpegin videoiden tarkistamiseen, eikä sitä löytynyt.");
-        Console.Error.WriteLine("Asenna se (winget install Gyan.FFmpeg), aseta \"ffmpegPath\" tai käytä valitsinta --no-videos.");
+        Console.Error.WriteLine("Error: rejectNonCats needs ffmpeg to check videos, and it was not found.");
+        Console.Error.WriteLine("Install it (winget install Gyan.FFmpeg), set \"ffmpegPath\" or use --no-videos.");
         return 2;
     }
-    Console.WriteLine("Huom: ffmpegiä ei löytynyt; Redditin videot tallennetaan ilman ääntä " +
-                      "ja tunnistetaan vain esikatselukuvasta.");
+    Console.WriteLine("Note: ffmpeg not found; Reddit videos are saved without audio " +
+                      "and checked from their preview image only.");
 }
 
 CatClassifier classifier;
@@ -51,17 +51,19 @@ try
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"Virhe: YOLO-mallin lataus epäonnistui: {ex.Message}");
+    Console.Error.WriteLine($"Error: loading the YOLO model failed: {ex.Message}");
     return 2;
 }
 using var classifierScope = classifier;
 Console.WriteLine(
-    $"Kissantunnistus: {Path.GetFileName(options.YoloModel)} (raja {Num(options.Confidence)})" +
+    $"Cat detection: {Path.GetFileName(options.YoloModel)} (threshold {Num(options.Confidence)})" +
     (classifier.UsesClassification
-        ? $" + {Path.GetFileName(options.YoloClassModel)} (raja {Num(options.ClassConfidence)})"
+        ? $" + {Path.GetFileName(options.YoloClassModel)} (threshold {Num(options.ClassConfidence)})"
         : "") +
-    (options.RejectNonCats ? "; postaukset ilman kissaa hylätään" : "; kaikki tallennetaan"));
+    (options.RejectNonCats ? "; posts without a cat are rejected" : "; everything is saved"));
 
+// Files go to <outputDir>/<download day>/<subreddit>/; one day per run, even across midnight.
+var day = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 int totalImages = 0, totalVideos = 0, totalRejected = 0, failures = 0;
 
 foreach (var subreddit in options.Subreddits)
@@ -69,8 +71,8 @@ foreach (var subreddit in options.Subreddits)
     var subState = state.Get(subreddit);
     Console.WriteLine();
     Console.WriteLine(subState.LastPostUtc is { } last
-        ? $"== r/{subreddit}: haetaan postaukset {DateTimeOffset.FromUnixTimeSeconds((long)last).ToLocalTime():yyyy-MM-dd HH:mm} jälkeen"
-        : $"== r/{subreddit}: ensimmäinen haku, enintään {options.Limit} uusinta postausta");
+        ? $"== r/{subreddit}: fetching posts after {DateTimeOffset.FromUnixTimeSeconds((long)last).ToLocalTime():yyyy-MM-dd HH:mm}"
+        : $"== r/{subreddit}: first fetch, up to {options.Limit} newest posts");
 
     List<RedditPost> posts;
     try
@@ -80,23 +82,23 @@ foreach (var subreddit in options.Subreddits)
     catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                    or System.Text.Json.JsonException or System.Xml.XmlException)
     {
-        Console.Error.WriteLine($"  Haku epäonnistui: {ex.Message}");
+        Console.Error.WriteLine($"  Fetch failed: {ex.Message}");
         failures++;
         continue;
     }
 
-    Console.WriteLine($"  Uusia kuva- ja videopostauksia: {posts.Count}");
-    var targetDir = Path.Combine(options.OutputDir, subreddit);
-    var rejectedDir = Path.Combine(options.OutputDir, "_ei-kissa", subreddit);
+    Console.WriteLine($"  New image and video posts: {posts.Count}");
+    var targetDir = Path.Combine(options.OutputDir, day, subreddit);
+    var rejectedDir = Path.Combine(options.OutputDir, "_rejected", day, subreddit);
 
-    // Käsitellään vanhimmasta uusimpaan, jotta tila voidaan tallentaa postaus kerrallaan.
+    // Oldest first, so the state can be saved after each post.
     foreach (var post in posts.OrderBy(p => p.CreatedUtc))
     {
         var workDir = Path.Combine(Path.GetTempPath(), "kissakuva", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);
         try
         {
-            await ProcessPostAsync(post, workDir, targetDir, rejectedDir);
+            await ProcessPostAsync(post, subreddit, workDir, targetDir, rejectedDir);
         }
         finally
         {
@@ -112,21 +114,21 @@ foreach (var subreddit in options.Subreddits)
 }
 
 Console.WriteLine();
-Console.WriteLine($"Valmis. Tallennettu {totalImages} kuvaa ja {totalVideos} videota" +
-    (options.RejectNonCats ? $", hylätty {totalRejected}" : "") +
-    (failures > 0 ? $", virheitä {failures}" : "") + ".");
+Console.WriteLine($"Done. Saved {totalImages} images and {totalVideos} videos" +
+    (options.RejectNonCats ? $", rejected {totalRejected}" : "") +
+    (failures > 0 ? $", errors {failures}" : "") + ".");
 return failures > 0 ? 1 : 0;
 
-// ---------------------------------------------------------------- käsittely
+// ---------------------------------------------------------------- processing
 
 /// <summary>
-/// Lataa ja tunnistaa postauksen kaikki tiedostot, päättää koko postauksesta (yksikin kissa riittää)
-/// ja tulostaa postauksesta yhden rivin.
+/// Downloads and checks every file of a post, decides for the whole post (one cat is enough)
+/// and prints one line for the post.
 /// </summary>
-async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, string rejectedDir)
+async Task ProcessPostAsync(RedditPost post, string subreddit, string workDir, string targetDir, string rejectedDir)
 {
-    var kind = post.Media.Count > 1 ? $"galleria ({post.Media.Count})"
-        : post.Media[0].IsVideo ? "video" : "kuva";
+    var kind = post.Media.Count > 1 ? $"gallery ({post.Media.Count})"
+        : post.Media[0].IsVideo ? "video" : "image";
     var files = new List<PostFile>();
     int existing = 0, videosOff = 0, unknown = 0, errors = 0;
 
@@ -137,7 +139,7 @@ async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, s
 
         var suffix = post.Media.Count > 1 ? $"_{i + 1}" : "";
         var baseName = $"{DateTimeOffset.FromUnixTimeSeconds((long)post.CreatedUtc):yyyyMMdd_HHmmss}_{post.Id}{suffix}";
-        if (FileExists(targetDir, baseName)) { existing++; continue; }
+        if (AlreadySaved(options.OutputDir, subreddit, baseName)) { existing++; continue; }
 
         try
         {
@@ -150,7 +152,7 @@ async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, s
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException
                                        or InvalidOperationException or System.Xml.XmlException)
         {
-            Console.Error.WriteLine($"  [virhe] {item.Url}: {ex.Message}");
+            Console.Error.WriteLine($"  [error] {item.Url}: {ex.Message}");
             errors++;
             failures++;
         }
@@ -158,11 +160,11 @@ async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, s
 
     if (files.Count == 0)
     {
-        var reason = errors > 0 ? "virhe"
-            : existing > 0 ? "ohitettu (on jo)"
-            : videosOff > 0 ? "ohitettu (videot pois)"
-            : unknown > 0 ? "ohitettu (tuntematon muoto)"
-            : "ohitettu";
+        var reason = errors > 0 ? "error"
+            : existing > 0 ? "skipped (exists)"
+            : videosOff > 0 ? "skipped (videos off)"
+            : unknown > 0 ? "skipped (unknown format)"
+            : "skipped";
         Report(kind, "–", reason, post.Title);
         return;
     }
@@ -171,8 +173,8 @@ async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, s
     var summary = post.Media.Count == 1
         ? files[0].Result.Summary
         : cats.Count > 0
-            ? $"kissa {cats.Count}/{files.Count}, paras {cats.MaxBy(f => f.Result.Score)!.Result.Summary}"
-            : $"ei kissaa 0/{files.Count}";
+            ? $"cat {cats.Count}/{files.Count}, best {cats.MaxBy(f => f.Result.Score)!.Result.Summary}"
+            : $"no cat 0/{files.Count}";
 
     string action;
     if (options.RejectNonCats && cats.Count == 0)
@@ -181,11 +183,11 @@ async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, s
         {
             Directory.CreateDirectory(rejectedDir);
             foreach (var f in files) File.Move(f.TempPath, Path.Combine(rejectedDir, f.BaseName + f.Extension), overwrite: true);
-            action = "hylätty → _ei-kissa";
+            action = "rejected → _rejected";
         }
         else
         {
-            action = "hylätty";
+            action = "rejected";
         }
         totalRejected += files.Count;
     }
@@ -197,7 +199,7 @@ async Task ProcessPostAsync(RedditPost post, string workDir, string targetDir, s
             File.Move(f.TempPath, Path.Combine(targetDir, f.BaseName + f.Extension), overwrite: true);
             if (f.IsVideo) totalVideos++; else totalImages++;
         }
-        action = "tallennettu" + (files.Any(f => f.IsVideo && !f.WithAudio) ? ", ei ääntä" : "");
+        action = "saved" + (files.Any(f => f.IsVideo && !f.WithAudio) ? ", no audio" : "");
     }
     Report(kind, summary, action, post.Title);
 }
@@ -216,7 +218,7 @@ async Task<PostFile?> DownloadImageAsync(MediaItem item, string workDir, int ind
 
 async Task<PostFile> DownloadVideoAsync(MediaItem item, RedditPost post, string workDir, int index, string baseName)
 {
-    // Esikatselukuva kuvaa postausta, joten se kelpaa vain yksittäisen videon tarkistukseen.
+    // The preview image shows the post, so it only fits a post with a single video.
     CatResult? result = null;
     if (post.Media.Count == 1 && post.ThumbnailUrl is not null)
     {
@@ -224,13 +226,13 @@ async Task<PostFile> DownloadVideoAsync(MediaItem item, RedditPost post, string 
         {
             result = Classify(await http.GetByteArrayAsync(post.ThumbnailUrl));
         }
-        catch (HttpRequestException) { /* tarkistetaan videon ruuduista */ }
+        catch (HttpRequestException) { /* fall back to the video's frames */ }
     }
 
     var path = Path.Combine(workDir, $"video{index}.mp4");
     var withAudio = await videos.DownloadAsync(item, path, workDir);
 
-    // Ei kissaa esikatselukuvassa: käydään läpi videon ruutuja, kunnes kissa löytyy.
+    // No cat in the preview image: go through the video's frames until a cat is found.
     if (result?.Verdict != CatVerdict.Cat)
     {
         await foreach (var frame in videos.ExtractFramesAsync(path, workDir))
@@ -253,7 +255,7 @@ CatResult Classify(byte[] image)
     }
     catch (Exception ex)
     {
-        return new CatResult(CatVerdict.Unverifiable, 0, $"tunnistus epäonnistui ({ex.GetType().Name})");
+        return new CatResult(CatVerdict.Unverifiable, 0, $"detection failed ({ex.GetType().Name})");
     }
 }
 
@@ -265,8 +267,11 @@ static void Report(string kind, string result, string action, string title)
 
 static string Num(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
 
-static bool FileExists(string dir, string baseName) =>
-    Directory.Exists(dir) && Directory.EnumerateFiles(dir, baseName + ".*").Any();
+/// <summary>True if the file was already saved on any day (<c>&lt;outputDir&gt;/&lt;day&gt;/&lt;subreddit&gt;/</c>).</summary>
+static bool AlreadySaved(string outputDir, string subreddit, string baseName) =>
+    Directory.Exists(outputDir) && Directory.EnumerateDirectories(outputDir)
+        .Select(dayDir => Path.Combine(dayDir, subreddit))
+        .Any(dir => Directory.Exists(dir) && Directory.EnumerateFiles(dir, baseName + ".*").Any());
 
-/// <summary>Ladattu ja tunnistettu tiedosto, joka odottaa postauksen päätöstä.</summary>
+/// <summary>A downloaded and checked file waiting for the post's decision.</summary>
 sealed record PostFile(string TempPath, string Extension, string BaseName, bool IsVideo, bool WithAudio, CatResult Result);

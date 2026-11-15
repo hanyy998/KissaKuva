@@ -1,7 +1,7 @@
 bin/
 obj/
 .vs/
-kuvat/
+images/
 kissakuva-state.json
 *.tmp
 models/

@@ -6,8 +6,8 @@ using System.Xml.Linq;
 namespace KissaKuva;
 
 /// <summary>
-/// Lataa videot. Redditin omat videot (v.redd.it) ovat DASH-muodossa: kuva ja ääni ovat erillisiä
-/// tiedostoja, jotka yhdistetään ffmpegillä. Ilman ffmpegiä tallennetaan pelkkä kuvaraita.
+/// Downloads videos. Reddit's own videos (v.redd.it) are DASH: picture and sound are separate
+/// files, merged with ffmpeg. Without ffmpeg only the picture track is saved.
 /// </summary>
 public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
 {
@@ -15,7 +15,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
 
     public string? FfmpegPath { get; } = ResolveFfmpeg(ffmpegPath);
 
-    /// <summary>Lataa videon <paramref name="outputPath"/>-tiedostoon (.mp4). Palauttaa true, jos ääni saatiin mukaan.</summary>
+    /// <summary>Downloads the video to <paramref name="outputPath"/> (.mp4). Returns true if the audio was included.</summary>
     public async Task<bool> DownloadAsync(MediaItem item, string outputPath, string workDir)
     {
         if (item.Kind == MediaKind.DirectVideo)
@@ -31,7 +31,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
         if (audioUrl is null)
         {
             File.Move(videoFile, outputPath, overwrite: true);
-            return true; // video ilman ääniraitaa on "täydellinen"
+            return true; // a video without an audio track is "complete"
         }
 
         if (FfmpegPath is not null)
@@ -44,7 +44,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
                     "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", outputPath);
                 return true;
             }
-            // Mikä tahansa virhe äänessä: tallennetaan kuva ilman ääntä, ettei postaus kaada ajoa.
+            // Any audio error: save the picture without sound, so one post cannot crash the run.
             catch (Exception) { }
         }
 
@@ -52,13 +52,13 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
         return false;
     }
 
-    /// <summary>Kohdat (osuus kestosta), joista ruudut poimitaan kissantunnistusta varten.</summary>
+    /// <summary>Positions (share of the duration) where frames are taken for cat detection.</summary>
     private static readonly double[] FramePositions = [0.05, 0.175, 0.30, 0.425, 0.55, 0.675, 0.80, 0.925];
 
     /// <summary>
-    /// Poimii videosta ruutuja JPEG-kuviksi tasaisin välein (vaatii ffmpegin). Ruudut tuotetaan yksi
-    /// kerrallaan, joten kutsuja voi lopettaa heti, kun kissa löytyy. Jos kestoa ei saada selville,
-    /// tuotetaan yksi ffmpegin valitsema edustava ruutu.
+    /// Takes evenly spaced frames from the video as JPEG images (needs ffmpeg). Frames come one at a
+    /// time, so the caller can stop as soon as a cat is found. If the duration is unknown, one
+    /// representative frame chosen by ffmpeg is returned.
     /// </summary>
     public async IAsyncEnumerable<byte[]> ExtractFramesAsync(string videoPath, string workDir)
     {
@@ -95,7 +95,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
         }
     }
 
-    /// <summary>Lukee videon keston ffmpegin tulosteesta ("Duration: 00:00:24.10").</summary>
+    /// <summary>Reads the video's duration from ffmpeg's output ("Duration: 00:00:24.10").</summary>
     private async Task<double?> GetDurationAsync(string videoPath)
     {
         var psi = new ProcessStartInfo(FfmpegPath!) { RedirectStandardError = true, UseShellExecute = false };
@@ -103,7 +103,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
         using var p = Process.Start(psi);
         if (p is null) return null;
         var stderr = await p.StandardError.ReadToEndAsync();
-        await p.WaitForExitAsync(); // päättyy virhekoodiin, koska tulostiedostoa ei anneta
+        await p.WaitForExitAsync(); // exits with an error code, since no output file is given
         var m = Regex.Match(stderr, @"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)");
         return m.Success
             ? int.Parse(m.Groups[1].Value) * 3600 + int.Parse(m.Groups[2].Value) * 60
@@ -111,7 +111,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
             : null;
     }
 
-    /// <summary>Lukee DASH-soittolistan ja valitsee parhaan kuva- ja ääniraidan.</summary>
+    /// <summary>Reads the DASH playlist and picks the best picture and sound tracks.</summary>
     private async Task<(string Video, string? Audio)> ResolveDashAsync(string url)
     {
         var baseUri = new Uri(url.TrimEnd('/') + "/");
@@ -136,7 +136,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
             }
         }
 
-        if (bestVideo is null) throw new InvalidOperationException("DASH-soittolistasta ei löytynyt videoraitaa.");
+        if (bestVideo is null) throw new InvalidOperationException("No video track found in the DASH playlist.");
         return (bestVideo.Value.Url, bestAudio?.Url);
     }
 
@@ -153,10 +153,10 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
     {
         var psi = new ProcessStartInfo(FfmpegPath!) { RedirectStandardError = true, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi) ?? throw new InvalidOperationException("ffmpegin käynnistys epäonnistui.");
+        using var p = Process.Start(psi) ?? throw new InvalidOperationException("Starting ffmpeg failed.");
         var stderr = await p.StandardError.ReadToEndAsync();
         await p.WaitForExitAsync();
-        if (p.ExitCode != 0) throw new InvalidOperationException($"ffmpeg epäonnistui: {stderr.Trim()}");
+        if (p.ExitCode != 0) throw new InvalidOperationException($"ffmpeg failed: {stderr.Trim()}");
     }
 
     private static string? ResolveFfmpeg(string? configured)
@@ -174,7 +174,7 @@ public sealed class VideoDownloader(HttpClient http, string? ffmpegPath)
                 catch (ArgumentException) { }
             }
 
-        // winget asentaa ffmpegin käyttäjäkohtaisesti; PATH päivittyy vasta uusiin päätteisiin.
+        // winget installs ffmpeg per user; PATH only updates in new terminals.
         var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
         if (OperatingSystem.IsWindows() && !string.IsNullOrEmpty(localAppData))
         {
